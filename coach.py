@@ -32,6 +32,9 @@ import threading
 import queue
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import requests
 import websocket
 import speech_recognition as sr
@@ -166,6 +169,7 @@ class RideState:
         self.last_updated            = 0
 
 state              = RideState()
+state_lock         = threading.Lock()
 last_spoken_at     = 0
 last_trigger       = ""
 speech_queue       = queue.Queue()
@@ -189,31 +193,32 @@ def on_message(ws, message):
             workout = payload.get("workout", {})
             nearby  = payload.get("nearby", [])
 
-            state.power    = stats.get("power", state.power)
-            state.hr       = stats.get("heartrate", state.hr)
-            state.cadence  = stats.get("cadence", state.cadence)
-            state.speed    = stats.get("speed", state.speed)
-            state.elapsed  = stats.get("elapsed", state.elapsed)
-            state.distance = stats.get("distance", state.distance)
-            state.ftp      = athlete.get("ftp", state.ftp)
+            with state_lock:
+                state.power    = stats.get("power", state.power)
+                state.hr       = stats.get("heartrate", state.hr)
+                state.cadence  = stats.get("cadence", state.cadence)
+                state.speed    = stats.get("speed", state.speed)
+                state.elapsed  = stats.get("elapsed", state.elapsed)
+                state.distance = stats.get("distance", state.distance)
+                state.ftp      = athlete.get("ftp", state.ftp)
 
-            if workout:
-                state.mode                    = "workout"
-                state.power_target            = workout.get("power", 0)
-                state.workout_block           = workout.get("name", "")
-                state.workout_block_remaining = workout.get("remaining", 0)
-            else:
-                state.mode = "race" if (nearby and any(r.get("position") for r in nearby)) else "freeride"
+                if workout:
+                    state.mode                    = "workout"
+                    state.power_target            = workout.get("power", 0)
+                    state.workout_block           = workout.get("name", "")
+                    state.workout_block_remaining = workout.get("remaining", 0)
+                else:
+                    state.mode = "race" if (nearby and any(r.get("position") for r in nearby)) else "freeride"
 
-            if nearby:
-                state.riders_nearby = len(nearby)
-                positions           = [r.get("position", 999) for r in nearby if r.get("position")]
-                state.position      = min(positions) if positions else 0
-                gaps                = [r.get("gap", 0) for r in nearby if r.get("gap", 0) > 0]
-                state.gap_to_front  = min(gaps) if gaps else 0
-                state.draft_watts   = stats.get("draftingWatts", 0)
+                if nearby:
+                    state.riders_nearby = len(nearby)
+                    positions           = [r.get("position", 999) for r in nearby if r.get("position")]
+                    state.position      = min(positions) if positions else 0
+                    gaps                = [r.get("gap", 0) for r in nearby if r.get("gap", 0) > 0]
+                    state.gap_to_front  = min(gaps) if gaps else 0
+                    state.draft_watts   = stats.get("draftingWatts", 0)
 
-            state.last_updated = time.time()
+                state.last_updated = time.time()
 
     except Exception as e:
         print(f"[WS parse error] {e}")
@@ -221,12 +226,19 @@ def on_message(ws, message):
 def on_error(ws, error):
     print(f"[WS error] {error}")
 
+_ws_reconnect_count = 0
+
 def on_close(ws, *args):
-    print("[WS] Connection closed. Retrying in 5s...")
-    time.sleep(5)
+    global _ws_reconnect_count
+    _ws_reconnect_count += 1
+    delay = min(5 * _ws_reconnect_count, 30)  # backoff: 5s, 10s, 15s, ... max 30s
+    print(f"[WS] Connection closed. Reconnecting in {delay}s (attempt {_ws_reconnect_count})...")
+    time.sleep(delay)
     connect_websocket()
 
 def on_open(ws):
+    global _ws_reconnect_count
+    _ws_reconnect_count = 0
     print("[WS] Connected to Sauce for Zwift")
     ws.send(json.dumps({"cmd": "subscribe", "event": "athlete/watching"}))
 
@@ -331,7 +343,14 @@ def voice_listener():
 
     print("[Voice] Listening for voice commands (wake word: 'zwift')...")
 
-    with sr.Microphone() as source:
+    try:
+        mic = sr.Microphone()
+    except (OSError, AttributeError) as e:
+        print(f"[Voice] No microphone found: {e}")
+        print("[Voice] Voice commands disabled. Proactive coaching still active.")
+        return
+
+    with mic as source:
         recognizer.adjust_for_ambient_noise(source, duration=1)
 
         while True:
@@ -356,15 +375,17 @@ def voice_listener():
 # ─────────────────────────────────────────────
 
 def detect_trigger():
-    s = state
-    if s.last_updated == 0:
-        return None, None
-
-    now = time.time()
     global last_spoken_at, last_trigger
+    now = time.time()
 
-    if now - last_spoken_at < COOLDOWN_SECONDS:
-        return None, None
+    with state_lock:
+        if state.last_updated == 0:
+            return None, None
+        if now - last_spoken_at < COOLDOWN_SECONDS:
+            return None, None
+        # Snapshot state under lock so we read a consistent set of values
+        s = RideState()
+        s.__dict__.update(state.__dict__)
 
     pct_of_target = (s.power / s.power_target * 100) if s.power_target > 0 else None
     pct_of_ftp    = (s.power / s.ftp * 100) if s.ftp > 0 else None
@@ -489,7 +510,7 @@ def _call_claude(system_prompt, user_prompt):
         )
         r.raise_for_status()
         text = r.json()["content"][0]["text"].strip()
-        return re.sub(r'\*[^*]+\*', '', text).strip()
+        return re.sub(r'\*([^*]+)\*', r'\1', text).strip()
     except Exception as e:
         print(f"[Claude error] {e}")
         return None
@@ -512,6 +533,19 @@ def generate_commentary_raw(prompt):
 # ElevenLabs TTS
 # ─────────────────────────────────────────────
 
+def _detect_audio_player():
+    """Detect available audio player once at startup."""
+    for name, args in [
+        ("afplay",  ["afplay"]),
+        ("mpg123",  ["mpg123", "-q"]),
+        ("ffplay",  ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"]),
+    ]:
+        if shutil.which(name):
+            return name, args
+    return None, None
+
+AUDIO_PLAYER_NAME, AUDIO_PLAYER_ARGS = _detect_audio_player()
+
 def speak(text):
     if not ELEVENLABS_KEY:
         print(f"[COACH] {text}")
@@ -527,18 +561,29 @@ def speak(text):
     try:
         r = requests.post(url, json=payload, headers=headers, stream=True, timeout=10)
         r.raise_for_status()
-        tmp = "/tmp/zwift_coach_audio.mp3"
-        with open(tmp, "wb") as f:
+        tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+        try:
             for chunk in r.iter_content(chunk_size=4096):
-                f.write(chunk)
-        if os.system("which afplay > /dev/null 2>&1") == 0:
-            os.system(f"afplay {tmp} &")
-        elif os.system("which mpg123 > /dev/null 2>&1") == 0:
-            os.system(f"mpg123 -q {tmp} &")
-        elif os.system("which ffplay > /dev/null 2>&1") == 0:
-            os.system(f"ffplay -nodisp -autoexit -loglevel quiet {tmp} &")
-        else:
-            print(f"[COACH - no player] {text}")
+                tmp.write(chunk)
+            tmp.close()
+            if AUDIO_PLAYER_ARGS:
+                proc = subprocess.Popen(
+                    AUDIO_PLAYER_ARGS + [tmp.name],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                # Wait for playback to finish, then clean up the temp file
+                threading.Thread(
+                    target=lambda p, f: (p.wait(), os.unlink(f)),
+                    args=(proc, tmp.name),
+                    daemon=True,
+                ).start()
+            else:
+                print(f"[COACH - no player] {text}")
+                os.unlink(tmp.name)
+        except Exception:
+            tmp.close()
+            os.unlink(tmp.name)
+            raise
     except Exception as e:
         print(f"[ElevenLabs error] {e}")
         print(f"[COACH] {text}")
@@ -602,6 +647,11 @@ def main():
     print("  \"zwift be mean\"          -> switch to drill sergeant")
     print("  ...and more. See coach.py for full list.")
     print()
+
+    if not ANTHROPIC_KEY:
+        print("ERROR: ANTHROPIC_API_KEY is not set. The coach cannot generate commentary.")
+        print("Copy .env.example to .env and add your API key.")
+        return
 
     # Start threads
     threading.Thread(target=speech_worker,  daemon=True).start()
