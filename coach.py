@@ -53,7 +53,16 @@ SAUCE_WS_URL     = os.getenv("SAUCE_WS_URL", "ws://localhost:1080/api/ws/events"
 SAUCE_HTTP_URL   = os.getenv("SAUCE_HTTP_URL", "http://localhost:1080/api")
 ELEVENLABS_KEY   = os.getenv("ELEVENLABS_API_KEY", "")
 ANTHROPIC_KEY    = os.getenv("ANTHROPIC_API_KEY", "")
-VOICE_ID         = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")
+# Per-personality voice IDs — override any via .env (e.g. VOICE_HYPE=abc123)
+# Defaults are well-known ElevenLabs premade voices; run with --list-voices to see all available.
+PERSONALITY_VOICES = {
+    "hype":           os.getenv("VOICE_HYPE",           "pNInz6obpgDQGcFmaJgB"),  # Adam — energetic American male
+    "drill_sergeant": os.getenv("VOICE_DRILL_SERGEANT", "VR6AewLTigWG4xSOukaG"),  # Arnold — deep, commanding
+    "british":        os.getenv("VOICE_BRITISH",        "onwK4e9ZLuTAKqWW03F9"),  # Daniel — British male
+    "data":           os.getenv("VOICE_DATA",           "GBv7mTt0atIp3Br8iCZE"),  # Thomas — calm, measured
+    "soviet":         os.getenv("VOICE_SOVIET",         "Xh5OictnmgRO4dff7pLm"),  # Soviet Russian
+}
+VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")  # fallback if personality has no voice
 
 _elevenlabs = ElevenLabsClient(api_key=ELEVENLABS_KEY) if ELEVENLABS_KEY else None
 
@@ -90,6 +99,12 @@ Keep it to 1-2 sentences. Very dry. Very British.""",
 specific numbers constantly. You find everything fascinating from an analytical standpoint.
 Keep commentary to 1-2 sentences but always include at least one specific metric or ratio.
 You're genuinely excited about the data, not the human.""",
+
+    "soviet": """You are a Soviet-era Russian cycling coach. You speak in heavily accented,
+broken English with Russian cadence and occasional Russian words (da, nyet, tovarishch,
+horosho). You treat suffering as a national duty. Weakness is capitalist. Pain is glorious.
+The collective is everything, the individual nothing — except when they perform well, in which
+case the Motherland is proud. Keep it to 1-2 sentences. Dark humour welcome.""",
 }
 
 ACTIVE_PERSONALITY = "hype"
@@ -102,48 +117,50 @@ ACTIVE_PERSONALITY = "hype"
 # key_to_press can be a Key enum, a string char, or None (for meta-commands)
 
 COMMAND_MAP = {
-    # Workout control
-    "skip_interval":       (Key.tab,        "Skipping interval!"),
-    "harder":              (Key.page_up,    "Turning it up!"),
-    "easier":              (Key.page_down,  "Dialling it back."),
-    "power_up":            (Key.space,      "Power up deployed!"),
-    "u_turn":              (Key.down,       "Turning around."),
-    "turn_left":           (Key.left,       "Turning left."),
-    "turn_right":          (Key.right,      "Turning right."),
-    "actions_menu":        (Key.up,         "Opening actions menu."),
-    "menu":                (Key.esc,        "Opening menu."),
+    # Workout control — coach responds dynamically
+    "skip_interval":       (Key.tab,        "coached:skip_interval"),
+    "harder":              (Key.page_up,    "coached:harder"),
+    "easier":              (Key.page_down,  "coached:easier"),
+    "power_up":            (Key.space,      "coached:power_up"),
+    "u_turn":              (Key.down,       "coached:u_turn"),
 
-    # Rider actions
-    "elbow_flick":         (Key.f1,         "Elbow flick!"),
-    "wave":                (Key.f2,         "Waving!"),
-    "ride_on":             (Key.f3,         "Ride on sent!"),
-    "hammer_time":         (Key.f4,         "Hammer time!"),
-    "nice":                (Key.f5,         "Nice!"),
-    "im_toast":            (Key.f7,         "Hang in there!"),
-    "bike_bell":           (Key.f8,         "Ding ding!"),
-    "capture_video":       (Key.f9,         "Recording!"),
-    "screenshot":          (Key.f10,        "Cheese!"),
+    # Navigation — silent, no need for verbal confirmation
+    "turn_left":           (Key.left,       None),
+    "turn_right":          (Key.right,      None),
+    "actions_menu":        (Key.up,         None),
+    "menu":                (Key.esc,        None),
 
-    # Menus & HUD
-    "device_pairing":      ('a',            "Opening device pairing."),
-    "workout_menu":        ('e',            "Opening workout menu."),
-    "toggle_graph":        ('g',            "Toggling graph."),
-    "hide_hud":            ('h',            "Toggling HUD."),
-    "group_message":       ('m',            "Opening group message."),
-    "promo_code":          ('p',            "Opening promo code entry."),
-    "garage":              ('t',            "Opening garage."),
+    # Rider actions — game already reacts visually/audibly
+    "elbow_flick":         (Key.f1,         None),
+    "wave":                (Key.f2,         None),
+    "ride_on":             (Key.f3,         None),
+    "hammer_time":         (Key.f4,         None),
+    "nice":                (Key.f5,         None),
+    "im_toast":            (Key.f7,         None),
+    "bike_bell":           (Key.f8,         None),
+    "capture_video":       (Key.f9,         None),
+    "screenshot":          (Key.f10,        "Cheese!"),  # keep this one
 
-    # Camera angles
-    "camera_default":      ('1',            "Default camera."),
-    "camera_close":        ('2',            "Close follow camera."),
-    "camera_first_person": ('3',            "First person view."),
-    "camera_side":         ('4',            "Side view."),
-    "camera_low":          ('5',            "Low view."),
-    "camera_rear":         ('6',            "Rear view."),
-    "camera_spectator":    ('7',            "Spectator view."),
-    "camera_helicopter":   ('8',            "Helicopter view."),
-    "camera_bird":         ('9',            "Bird's eye view."),
-    "camera_drone":        ('0',            "Drone view."),
+    # Menus & HUD — silent
+    "device_pairing":      ('a',            None),
+    "workout_menu":        ('e',            None),
+    "toggle_graph":        ('g',            None),
+    "hide_hud":            ('h',            None),
+    "group_message":       ('m',            None),
+    "promo_code":          ('p',            None),
+    "garage":              ('t',            None),
+
+    # Camera angles — silent
+    "camera_default":      ('1',            None),
+    "camera_close":        ('2',            None),
+    "camera_first_person": ('3',            None),
+    "camera_side":         ('4',            None),
+    "camera_low":          ('5',            None),
+    "camera_rear":         ('6',            None),
+    "camera_spectator":    ('7',            None),
+    "camera_helicopter":   ('8',            None),
+    "camera_bird":         ('9',            None),
+    "camera_drone":        ('0',            None),
 
     # Meta — handled in code, no keypress
     "status_report":       (None,           "status_report"),
@@ -151,6 +168,7 @@ COMMAND_MAP = {
     "personality_drill":   (None,           "personality:drill_sergeant"),
     "personality_british": (None,           "personality:british"),
     "personality_data":    (None,           "personality:data"),
+    "personality_soviet":  (None,           "personality:soviet"),
 }
 
 _CLASSIFY_SYSTEM = """You classify voice commands for a Zwift cycling app. \
@@ -206,6 +224,7 @@ Coach meta:
 - personality_drill: switch to drill sergeant coach mode
 - personality_british: switch to British coach mode
 - personality_data: switch to data or nerdy coach mode
+- personality_soviet: switch to Soviet Russian coach mode
 
 - freeform: a question or comment that doesn't match any command
 
@@ -387,20 +406,45 @@ def handle_voice_action(key, response):
         keyboard.press(key)
         time.sleep(0.05)
         keyboard.release(key)
-        speech_queue.put(response)
-        last_spoken_at = time.time()
+        if response is None:
+            return  # game provides its own feedback, stay silent
+        if response.startswith("coached:"):
+            command = response[8:]
+            s = state
+            context_str = (
+                f"Power: {s.power}W, HR: {s.hr}bpm, cadence: {s.cadence}rpm, mode: {s.mode}"
+                + (f", target: {s.power_target}W" if s.power_target else "")
+                + "."
+            )
+            prompt = (
+                f"The rider just triggered the '{command}' command. "
+                f"Current ride data: {context_str}. "
+                f"Give a single short reaction (1 sentence, no more than 10 words). "
+                f"Vary your response — don't repeat the same phrase."
+            )
+            commentary = generate_commentary_raw(prompt)
+            if commentary:
+                speech_queue.put(commentary)
+                last_spoken_at = time.time()
+        else:
+            speech_queue.put(response)
+            last_spoken_at = time.time()
 
     elif response.startswith("personality:"):
-        # Switch personality
+        # Switch personality — let Claude react in character
         new = response.split(":")[1]
         ACTIVE_PERSONALITY = new
-        confirmations = {
-            "hype":            "LET'S GOOOOO! Hype mode ACTIVATED, baby!",
-            "drill_sergeant":  "Switching to drill sergeant. Don't embarrass yourself.",
-            "british":         "Very well. I shall endeavour to contain my disappointment.",
-            "data":            "Personality switch confirmed. Optimising motivational output.",
+        personality_names = {
+            "hype": "hype hype-beast", "drill_sergeant": "drill sergeant",
+            "british": "dry British", "data": "data-driven nerdy",
+            "soviet": "Soviet Russian",
         }
-        speech_queue.put(confirmations.get(new, f"Switched to {new} mode."))
+        prompt = (
+            f"You just switched to {personality_names.get(new, new)} coach mode. "
+            f"Give a single sentence in-character to announce the switch."
+        )
+        commentary = generate_commentary_raw(prompt)
+        speech_queue.put(commentary or f"Switched to {new} mode.")
         last_spoken_at = time.time()
 
     elif response == "status_report":
@@ -677,8 +721,9 @@ def speak(text):
         return
 
     try:
+        voice_id = PERSONALITY_VOICES.get(ACTIVE_PERSONALITY, VOICE_ID)
         audio_stream = _elevenlabs.text_to_speech.stream(
-            voice_id=VOICE_ID,
+            voice_id=voice_id,
             text=text,
             model_id="eleven_turbo_v2_5",
             output_format="mp3_44100_128",
@@ -793,4 +838,15 @@ def main():
     coaching_loop()
 
 if __name__ == "__main__":
+    import sys
+    if "--list-voices" in sys.argv:
+        if not _elevenlabs:
+            print("ELEVENLABS_API_KEY not set.")
+        else:
+            voices = _elevenlabs.voices.get_all().voices
+            print(f"{'Name':<25} {'Voice ID':<30} Category")
+            print("-" * 70)
+            for v in sorted(voices, key=lambda v: v.name):
+                print(f"{v.name:<25} {v.voice_id:<30} {v.category or ''}")
+        sys.exit(0)
     main()
