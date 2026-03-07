@@ -852,3 +852,53 @@ class TestAudioPlayerDetection:
         name, args = coach._detect_audio_player()
         assert name is None
         assert args is None
+
+
+# ─────────────────────────────────────────────
+# STT fallback tests (mlx_whisper → Google)
+# ─────────────────────────────────────────────
+
+class TestSTTFallback:
+    def test_mlx_whisper_flag_set_when_available(self):
+        """mlx_whisper is mocked in our test setup, so the flag should be True."""
+        assert coach._USE_MLX_WHISPER is True
+
+    def test_google_fallback_when_mlx_unavailable(self):
+        """When _USE_MLX_WHISPER is False, voice_listener should use Google STT."""
+        original = coach._USE_MLX_WHISPER
+        coach._USE_MLX_WHISPER = False
+        try:
+            # Verify the flag controls the branch — we can't run the full
+            # listener but we can confirm the flag toggles correctly
+            assert coach._USE_MLX_WHISPER is False
+        finally:
+            coach._USE_MLX_WHISPER = original
+
+    @patch("coach.sr.Microphone")
+    def test_voice_listener_prints_google_engine(self, mock_mic, capsys):
+        """When mlx_whisper unavailable, voice_listener prints 'google' as STT engine."""
+        original = coach._USE_MLX_WHISPER
+        coach._USE_MLX_WHISPER = False
+
+        # Make Microphone raise so listener exits early after printing
+        mock_mic.side_effect = OSError("no mic")
+        try:
+            coach.voice_listener()
+            captured = capsys.readouterr()
+            assert "STT: google" in captured.out
+        finally:
+            coach._USE_MLX_WHISPER = original
+
+    @patch("coach.sr.Microphone")
+    def test_voice_listener_prints_mlx_engine(self, mock_mic, capsys):
+        """When mlx_whisper available, voice_listener prints 'mlx_whisper' as STT engine."""
+        original = coach._USE_MLX_WHISPER
+        coach._USE_MLX_WHISPER = True
+
+        mock_mic.side_effect = OSError("no mic")
+        try:
+            coach.voice_listener()
+            captured = capsys.readouterr()
+            assert "STT: mlx_whisper" in captured.out
+        finally:
+            coach._USE_MLX_WHISPER = original

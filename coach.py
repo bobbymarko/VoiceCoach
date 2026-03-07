@@ -39,7 +39,11 @@ import requests
 import websocket
 from elevenlabs import ElevenLabs as ElevenLabsClient
 import speech_recognition as sr
-import mlx_whisper
+try:
+    import mlx_whisper
+    _USE_MLX_WHISPER = True
+except ImportError:
+    _USE_MLX_WHISPER = False
 from pynput.keyboard import Key, Controller as KeyboardController
 from dotenv import load_dotenv
 
@@ -486,7 +490,8 @@ def voice_listener():
     recognizer.dynamic_energy_threshold = False  # prevents wake word clipping
     recognizer.pause_threshold = 0.6
 
-    print("[Voice] Listening for voice commands (wake word: 'zwift')...")
+    stt_engine = "mlx_whisper" if _USE_MLX_WHISPER else "google"
+    print(f"[Voice] Listening for voice commands (wake word: 'zwift', STT: {stt_engine})...")
 
     try:
         mic = sr.Microphone()
@@ -506,19 +511,25 @@ def voice_listener():
                 if _tts_active.is_set() or time.time() - _tts_ended_at < TTS_GRACE_SECONDS:
                     continue
 
-                tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-                try:
-                    tmp_wav.write(audio.get_wav_data())
-                    tmp_wav.close()
-                    result = mlx_whisper.transcribe(
-                        tmp_wav.name,
-                        path_or_hf_repo=WHISPER_MODEL,
-                        language="en",
-                        initial_prompt="Zwift is a cycling app. The wake word is 'Zwift'.",
-                    )
-                    transcript = result["text"].strip()
-                finally:
-                    os.unlink(tmp_wav.name)
+                if _USE_MLX_WHISPER:
+                    tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                    try:
+                        tmp_wav.write(audio.get_wav_data())
+                        tmp_wav.close()
+                        result = mlx_whisper.transcribe(
+                            tmp_wav.name,
+                            path_or_hf_repo=WHISPER_MODEL,
+                            language="en",
+                            initial_prompt="Zwift is a cycling app. The wake word is 'Zwift'.",
+                        )
+                        transcript = result["text"].strip()
+                    finally:
+                        os.unlink(tmp_wav.name)
+                else:
+                    try:
+                        transcript = recognizer.recognize_google(audio).strip()
+                    except sr.UnknownValueError:
+                        continue
 
                 if not transcript:
                     continue
