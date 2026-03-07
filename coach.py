@@ -514,13 +514,21 @@ def voice_listener():
                         tmp_wav.name,
                         path_or_hf_repo=WHISPER_MODEL,
                         language="en",
-                        initial_prompt="Zwift is a cycling app. The wake word is 'Zwift'.",
+                        initial_prompt="Zwift",  # short = less for Whisper to hallucinate
+                        condition_on_previous_text=False,
                     )
                     transcript = result["text"].strip()
                 finally:
                     os.unlink(tmp_wav.name)
 
                 if not transcript:
+                    continue
+
+                # Filter Whisper hallucinations (outputting prompt or silence artifacts)
+                _lower = transcript.lower()
+                if any(h in _lower for h in ("cycling app", "wake word", "thank you for watching", "thanks for watching")):
+                    continue
+                if _lower in ("you", "you.", "yeah", "yeah.", "hmm", "hmm."):
                     continue
 
                 print(f"[Voice] Heard: '{transcript}'")
