@@ -175,6 +175,15 @@ COMMAND_MAP = {
     "personality_soviet":  (None,           "personality:soviet"),
 }
 
+# Commands that only function in certain Zwift modes.
+# If mode is "unknown" we let it through (Sauce not yet connected).
+COMMAND_MODE_RESTRICTIONS = {
+    "skip_interval": {"workout"},
+    "harder":        {"workout"},
+    "easier":        {"workout"},
+    "u_turn":        {"workout", "freeride"},  # blocked during races
+}
+
 _CLASSIFY_SYSTEM = """You classify voice commands for a Zwift cycling app. \
 Return ONLY the command ID that best matches what the rider said. \
 Available command IDs and what they mean:
@@ -405,6 +414,22 @@ def handle_voice_action(key, response):
     global ACTIVE_PERSONALITY, last_spoken_at
 
     if key is not None:
+        # Check if this command is valid in the current mode
+        command_id = response[8:] if response and response.startswith("coached:") else None
+        if command_id and command_id in COMMAND_MODE_RESTRICTIONS:
+            allowed = COMMAND_MODE_RESTRICTIONS[command_id]
+            if state.mode not in allowed and state.mode != "unknown":
+                mode_labels = {"workout": "a workout", "race": "a race", "freeride": "free ride"}
+                prompt = (
+                    f"The rider tried the '{command_id}' command but they're in {mode_labels.get(state.mode, state.mode)} mode "
+                    f"where that command doesn't work in Zwift. "
+                    f"In one short sentence, let them know it won't work here. Be in character."
+                )
+                msg = generate_commentary_raw(prompt)
+                speech_queue.put(msg or f"That doesn't work in {state.mode} mode.")
+                last_spoken_at = time.time()
+                return
+
         # It's a real keypress — send it to Zwift
         print(f"[Voice] Sending key: {key}")
         keyboard.press(key)

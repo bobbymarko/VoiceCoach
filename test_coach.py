@@ -436,6 +436,75 @@ class TestHandleVoiceAction:
 
 
 # ─────────────────────────────────────────────
+# Mode restriction tests
+# ─────────────────────────────────────────────
+
+class TestModeRestrictions:
+    def setup_method(self):
+        while not coach.speech_queue.empty():
+            try:
+                coach.speech_queue.get_nowait()
+            except queue.Empty:
+                break
+        self._original_mode = coach.state.mode
+
+    def teardown_method(self):
+        coach.state.mode = self._original_mode
+
+    @patch("coach.generate_commentary_raw", return_value="That only works in a workout.")
+    @patch.object(coach.keyboard, "press")
+    def test_skip_interval_blocked_in_race(self, mock_press, mock_gen):
+        coach.state.mode = "race"
+        coach.handle_voice_action(mock_key.tab, "coached:skip_interval")
+        mock_press.assert_not_called()
+        msg = coach.speech_queue.get_nowait()
+        assert msg == "That only works in a workout."
+
+    @patch("coach.generate_commentary_raw", return_value="ERG only works in workout mode.")
+    @patch.object(coach.keyboard, "press")
+    def test_harder_blocked_in_freeride(self, mock_press, mock_gen):
+        coach.state.mode = "freeride"
+        coach.handle_voice_action(mock_key.page_up, "coached:harder")
+        mock_press.assert_not_called()
+        msg = coach.speech_queue.get_nowait()
+        assert msg == "ERG only works in workout mode."
+
+    @patch("coach.generate_commentary_raw", return_value="Can't U-turn mid-race!")
+    @patch.object(coach.keyboard, "press")
+    def test_u_turn_blocked_in_race(self, mock_press, mock_gen):
+        coach.state.mode = "race"
+        coach.handle_voice_action(mock_key.down, "coached:u_turn")
+        mock_press.assert_not_called()
+        msg = coach.speech_queue.get_nowait()
+        assert msg == "Can't U-turn mid-race!"
+
+    @patch.object(coach.keyboard, "press")
+    @patch.object(coach.keyboard, "release")
+    @patch("coach.generate_commentary_raw", return_value="Skipping!")
+    def test_skip_interval_allowed_in_workout(self, mock_gen, mock_release, mock_press):
+        coach.state.mode = "workout"
+        coach.handle_voice_action(mock_key.tab, "coached:skip_interval")
+        mock_press.assert_called_once()
+
+    @patch.object(coach.keyboard, "press")
+    @patch.object(coach.keyboard, "release")
+    @patch("coach.generate_commentary_raw", return_value="Turning around!")
+    def test_u_turn_allowed_in_freeride(self, mock_gen, mock_release, mock_press):
+        coach.state.mode = "freeride"
+        coach.handle_voice_action(mock_key.down, "coached:u_turn")
+        mock_press.assert_called_once()
+
+    @patch.object(coach.keyboard, "press")
+    @patch.object(coach.keyboard, "release")
+    @patch("coach.generate_commentary_raw", return_value="Turning!")
+    def test_command_allowed_when_mode_unknown(self, mock_gen, mock_release, mock_press):
+        """When Sauce hasn't connected yet, don't block commands."""
+        coach.state.mode = "unknown"
+        coach.handle_voice_action(mock_key.tab, "coached:skip_interval")
+        mock_press.assert_called_once()
+
+
+# ─────────────────────────────────────────────
 # RideState tests
 # ─────────────────────────────────────────────
 
