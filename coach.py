@@ -13,7 +13,7 @@ Setup:
 1. Copy .env.example to .env and fill in your API keys
 1. python coach.py
 
-Voice commands (say "zwift" then your command):
+Voice commands (say "hey zwift" then your command):
 "skip interval"         → Tab        (skip current workout block)
 "harder" / "push"       → Page Up    (increase workout intensity)
 "easier" / "back off"   → Page Down  (decrease workout intensity)
@@ -39,7 +39,11 @@ import requests
 import websocket
 from elevenlabs import ElevenLabs as ElevenLabsClient
 import speech_recognition as sr
-import mlx_whisper
+try:
+    import mlx_whisper
+    _USE_MLX_WHISPER = True
+except ImportError:
+    _USE_MLX_WHISPER = False
 from pynput.keyboard import Key, Controller as KeyboardController
 from dotenv import load_dotenv
 
@@ -67,8 +71,8 @@ VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")  # fallback 
 _elevenlabs = ElevenLabsClient(api_key=ELEVENLABS_KEY) if ELEVENLABS_KEY else None
 
 WHISPER_MODEL    = os.getenv("WHISPER_MODEL", "mlx-community/whisper-small-mlx")
-WAKE_WORD        = "zwift"       # say this before your command
-WAKE_WORDS       = ("zwift", "swift", "zwith", "is with", "is we", "his lift")  # common Whisper mishearings
+WAKE_WORD        = "hey zwift"   # say this before your command
+WAKE_WORDS       = ("hey zwift", "hey swift", "hey zwith", "hey is with", "hey is we", "hey his lift", "a zwift", "a swift")  # common Whisper mishearings
 COOLDOWN_SECONDS = 12            # min seconds between proactive coach comments
 CHECK_INTERVAL   = 3             # seconds between trigger checks
 MIC_ENERGY       = 300           # mic sensitivity — raise if false triggers, lower if not hearing you
@@ -486,7 +490,8 @@ def voice_listener():
     recognizer.dynamic_energy_threshold = False  # prevents wake word clipping
     recognizer.pause_threshold = 0.6
 
-    print("[Voice] Listening for voice commands (wake word: 'zwift')...")
+    stt_engine = "mlx_whisper" if _USE_MLX_WHISPER else "google"
+    print(f"[Voice] Listening for voice commands (wake word: 'hey zwift', STT: {stt_engine})...")
 
     try:
         mic = sr.Microphone()
@@ -506,20 +511,26 @@ def voice_listener():
                 if _tts_active.is_set() or time.time() - _tts_ended_at < TTS_GRACE_SECONDS:
                     continue
 
-                tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-                try:
-                    tmp_wav.write(audio.get_wav_data())
-                    tmp_wav.close()
-                    result = mlx_whisper.transcribe(
-                        tmp_wav.name,
-                        path_or_hf_repo=WHISPER_MODEL,
-                        language="en",
-                        initial_prompt="Zwift",  # short = less for Whisper to hallucinate
-                        condition_on_previous_text=False,
-                    )
-                    transcript = result["text"].strip()
-                finally:
-                    os.unlink(tmp_wav.name)
+                if _USE_MLX_WHISPER:
+                    tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                    try:
+                        tmp_wav.write(audio.get_wav_data())
+                        tmp_wav.close()
+                        result = mlx_whisper.transcribe(
+                            tmp_wav.name,
+                            path_or_hf_repo=WHISPER_MODEL,
+                            language="en",
+                            initial_prompt="Zwift",  # short = less for Whisper to hallucinate
+                            condition_on_previous_text=False,
+                        )
+                        transcript = result["text"].strip()
+                    finally:
+                        os.unlink(tmp_wav.name)
+                else:
+                    try:
+                        transcript = recognizer.recognize_google(audio).strip()
+                    except sr.UnknownValueError:
+                        continue
 
                 if not transcript:
                     continue
@@ -817,12 +828,12 @@ def main():
     print("=" * 60)
     print()
     print("  Voice commands:")
-    print("  \"zwift skip interval\"    -> skip workout block")
-    print("  \"zwift harder\"           -> increase intensity")
-    print("  \"zwift easier\"           -> decrease intensity")
-    print("  \"zwift power up\"         -> use power-up")
-    print("  \"zwift how am I doing\"   -> live status report")
-    print("  \"zwift be mean\"          -> switch to drill sergeant")
+    print("  \"hey zwift skip interval\"    -> skip workout block")
+    print("  \"hey zwift harder\"           -> increase intensity")
+    print("  \"hey zwift easier\"           -> decrease intensity")
+    print("  \"hey zwift power up\"         -> use power-up")
+    print("  \"hey zwift how am I doing\"   -> live status report")
+    print("  \"hey zwift be mean\"          -> switch to drill sergeant")
     print("  ...and more. See coach.py for full list.")
     print()
 
@@ -840,7 +851,22 @@ def main():
 
     # Give a startup message once Sauce connects (short delay)
     time.sleep(3)
-    speech_queue.put("Zwift AI Coach is online. I'm watching. Let's go!")
+    import random
+    _welcome_messages = [
+        "Coach is online. Let's ride!",
+        "Connected. Time to suffer.",
+        "I'm here. Legs ready?",
+        "Coach locked in. Let's go!",
+        "Online and watching. Ride hard!",
+        "Linked up. Show me what you've got.",
+        "Ready to coach. Pedal up!",
+        "I see you. Let's make it hurt.",
+        "Coach is live. No slacking.",
+        "Connected. Let's get after it.",
+        "All systems go. Ride on!",
+        "Locked in. Time to turn the screws.",
+    ]
+    speech_queue.put(random.choice(_welcome_messages))
 
     # Main coaching loop (blocks)
     coaching_loop()
