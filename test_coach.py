@@ -77,22 +77,22 @@ class TestMatchCommand:
     def test_skip_interval(self, mock_classify):
         key, resp = coach.match_command("hey zwift skip interval")
         assert key is not None
-        assert resp == "Skipping interval!"
+        assert resp == "coached:skip_interval"
 
     @patch("coach._classify_voice_command", return_value="harder")
     def test_harder(self, mock_classify):
         key, resp = coach.match_command("hey zwift harder")
-        assert resp == "Turning it up!"
+        assert resp == "coached:harder"
 
     @patch("coach._classify_voice_command", return_value="easier")
     def test_easier(self, mock_classify):
         key, resp = coach.match_command("hey zwift back off")
-        assert resp == "Dialling it back."
+        assert resp == "coached:easier"
 
     @patch("coach._classify_voice_command", return_value="power_up")
     def test_power_up(self, mock_classify):
         key, resp = coach.match_command("hey zwift power up")
-        assert resp == "Power up deployed!"
+        assert resp == "coached:power_up"
 
     @patch("coach._classify_voice_command", return_value="screenshot")
     def test_screenshot(self, mock_classify):
@@ -102,12 +102,12 @@ class TestMatchCommand:
     @patch("coach._classify_voice_command", return_value="ride_on")
     def test_ride_on(self, mock_classify):
         key, resp = coach.match_command("hey zwift ride on")
-        assert resp == "Ride on sent!"
+        assert resp is None  # silent — game provides visual feedback
 
     @patch("coach._classify_voice_command", return_value="u_turn")
     def test_u_turn(self, mock_classify):
         key, resp = coach.match_command("hey zwift u turn")
-        assert resp == "Turning around."
+        assert resp == "coached:u_turn"
 
     @patch("coach._classify_voice_command", return_value="status_report")
     def test_status_report(self, mock_classify):
@@ -136,12 +136,12 @@ class TestMatchCommand:
     @patch("coach._classify_voice_command", return_value="harder")
     def test_case_insensitive(self, mock_classify):
         key, resp = coach.match_command("HEY ZWIFT HARDER")
-        assert resp == "Turning it up!"
+        assert resp == "coached:harder"
 
     @patch("coach._classify_voice_command", return_value="wave")
     def test_wake_word_mid_sentence(self, mock_classify):
         key, resp = coach.match_command("hey zwift wave")
-        assert resp == "Waving!"
+        assert resp is None  # silent — game provides visual feedback
 
     def test_empty_string(self):
         key, resp = coach.match_command("")
@@ -409,11 +409,12 @@ class TestHandleVoiceAction:
         mock_release.assert_called_once_with(mock_key.tab)
         assert coach.speech_queue.get_nowait() == "Skipping interval!"
 
-    def test_personality_switch(self):
+    @patch("coach.generate_commentary_raw", return_value="Right then, dry British coach mode engaged.")
+    def test_personality_switch(self, mock_gen):
         coach.handle_voice_action(None, "personality:british")
         assert coach.ACTIVE_PERSONALITY == "british"
         msg = coach.speech_queue.get_nowait()
-        assert "endeavour" in msg.lower()
+        assert msg == "Right then, dry British coach mode engaged."
         # Reset
         coach.ACTIVE_PERSONALITY = "hype"
 
@@ -460,26 +461,26 @@ class TestRideState:
 
 class TestSpeak:
     def test_no_api_key_prints(self, capsys):
-        original = coach.ELEVENLABS_KEY
-        coach.ELEVENLABS_KEY = ""
+        original = coach._elevenlabs
+        coach._elevenlabs = None
         try:
             coach.speak("Test message")
             captured = capsys.readouterr()
             assert "[COACH] Test message" in captured.out
         finally:
-            coach.ELEVENLABS_KEY = original
+            coach._elevenlabs = original
 
-    @patch("coach.requests.post")
-    def test_api_error_falls_back_to_print(self, mock_post, capsys):
-        original = coach.ELEVENLABS_KEY
-        coach.ELEVENLABS_KEY = "fake-key"
-        mock_post.side_effect = Exception("API down")
+    def test_api_error_falls_back_to_print(self, capsys):
+        mock_client = MagicMock()
+        mock_client.text_to_speech.stream.side_effect = Exception("API down")
+        original = coach._elevenlabs
+        coach._elevenlabs = mock_client
         try:
             coach.speak("Fallback test")
             captured = capsys.readouterr()
             assert "[COACH] Fallback test" in captured.out
         finally:
-            coach.ELEVENLABS_KEY = original
+            coach._elevenlabs = original
 
 
 # ─────────────────────────────────────────────
@@ -494,7 +495,7 @@ class TestWakeWordVariants:
     @patch("coach._classify_voice_command", return_value="harder")
     def test_hey_swift_mishearing(self, mock_classify):
         key, resp = coach.match_command("hey swift harder")
-        assert resp == "Turning it up!"
+        assert resp == "coached:harder"
 
     @patch("coach._classify_voice_command", return_value="screenshot")
     def test_hey_zwith_mishearing(self, mock_classify):
@@ -504,27 +505,27 @@ class TestWakeWordVariants:
     @patch("coach._classify_voice_command", return_value="wave")
     def test_hey_is_with_mishearing(self, mock_classify):
         key, resp = coach.match_command("hey is with wave")
-        assert resp == "Waving!"
+        assert resp is None  # silent
 
     @patch("coach._classify_voice_command", return_value="ride_on")
     def test_hey_his_lift_mishearing(self, mock_classify):
         key, resp = coach.match_command("hey his lift ride on")
-        assert resp == "Ride on sent!"
+        assert resp is None  # silent
 
     @patch("coach._classify_voice_command", return_value="easier")
     def test_hey_is_we_mishearing(self, mock_classify):
         key, resp = coach.match_command("hey is we easier")
-        assert resp == "Dialling it back."
+        assert resp == "coached:easier"
 
     @patch("coach._classify_voice_command", return_value="harder")
     def test_a_zwift_mishearing(self, mock_classify):
         key, resp = coach.match_command("a zwift harder")
-        assert resp == "Turning it up!"
+        assert resp == "coached:harder"
 
     @patch("coach._classify_voice_command", return_value="easier")
     def test_a_swift_mishearing(self, mock_classify):
         key, resp = coach.match_command("a swift easier")
-        assert resp == "Dialling it back."
+        assert resp == "coached:easier"
 
     def test_wake_word_only_no_command(self):
         key, resp = coach.match_command("hey zwift")
@@ -535,6 +536,22 @@ class TestWakeWordVariants:
         key, resp = coach.match_command("hey swift")
         assert key is None
         assert resp is None
+
+    @patch("coach._classify_voice_command", return_value="harder")
+    def test_bare_zwift_does_not_trigger(self, mock_classify):
+        """'zwift' without 'hey' should not activate the coach."""
+        key, resp = coach.match_command("zwift harder")
+        assert key is None
+        assert resp is None
+        mock_classify.assert_not_called()
+
+    @patch("coach._classify_voice_command", return_value="harder")
+    def test_bare_swift_does_not_trigger(self, mock_classify):
+        """'swift' without 'hey' should not activate the coach."""
+        key, resp = coach.match_command("swift harder")
+        assert key is None
+        assert resp is None
+        mock_classify.assert_not_called()
 
 
 # ─────────────────────────────────────────────
@@ -912,3 +929,165 @@ class TestSTTFallback:
             assert "STT: mlx_whisper" in captured.out
         finally:
             coach._USE_MLX_WHISPER = original
+
+
+# ─────────────────────────────────────────────
+# Whisper hallucination filter tests
+# ─────────────────────────────────────────────
+
+def _make_voice_listener_mocks(transcribe_text):
+    """Helper: returns patches that run voice_listener once with a given transcript.
+
+    Uses KeyboardInterrupt (BaseException, not Exception) as the stop signal so
+    it escapes voice_listener's inner ``except Exception`` handler.
+    """
+    mock_audio = MagicMock()
+    mock_audio.get_wav_data.return_value = b"fake_audio"
+
+    mock_recognizer = MagicMock()
+    # First listen() returns audio; second raises KeyboardInterrupt to exit the loop
+    mock_recognizer.listen.side_effect = [mock_audio, KeyboardInterrupt]
+
+    mock_recognizer_cls = MagicMock(return_value=mock_recognizer)
+    mock_transcribe = MagicMock(return_value={"text": transcribe_text})
+
+    return mock_recognizer_cls, mock_transcribe
+
+
+class TestHallucinationFilter:
+    """voice_listener should silently discard known Whisper hallucinations."""
+
+    def _run_listener_with_transcript(self, transcript):
+        mock_recognizer_cls, mock_transcribe = _make_voice_listener_mocks(transcript)
+        original_use_mlx = coach._USE_MLX_WHISPER
+        original_tts_ended_at = coach._tts_ended_at
+        coach._USE_MLX_WHISPER = True
+        coach._tts_ended_at = 0.0  # ensure TTS grace period doesn't filter audio
+        try:
+            with patch("coach.sr.Recognizer", mock_recognizer_cls), \
+                 patch("coach.sr.Microphone"), \
+                 patch("coach.mlx_whisper.transcribe", mock_transcribe), \
+                 patch("coach.match_command", return_value=(None, None)) as mock_match:
+                with pytest.raises(KeyboardInterrupt):
+                    coach.voice_listener()
+                return mock_match
+        finally:
+            coach._USE_MLX_WHISPER = original_use_mlx
+            coach._tts_ended_at = original_tts_ended_at
+
+    def test_filters_cycling_app(self):
+        mock_match = self._run_listener_with_transcript("Zwift is a cycling app.")
+        mock_match.assert_not_called()
+
+    def test_filters_wake_word_phrase(self):
+        mock_match = self._run_listener_with_transcript("The wake word is Hey Zwift.")
+        mock_match.assert_not_called()
+
+    def test_filters_thank_you_for_watching(self):
+        mock_match = self._run_listener_with_transcript("Thank you for watching.")
+        mock_match.assert_not_called()
+
+    def test_filters_thanks_for_watching(self):
+        mock_match = self._run_listener_with_transcript("Thanks for watching!")
+        mock_match.assert_not_called()
+
+    def test_filters_silence_you(self):
+        mock_match = self._run_listener_with_transcript("you.")
+        mock_match.assert_not_called()
+
+    def test_filters_silence_yeah(self):
+        mock_match = self._run_listener_with_transcript("Yeah.")
+        mock_match.assert_not_called()
+
+    def test_filters_silence_hmm(self):
+        mock_match = self._run_listener_with_transcript("Hmm.")
+        mock_match.assert_not_called()
+
+    def test_valid_transcript_passes_through(self):
+        """A real command should not be filtered."""
+        mock_match = self._run_listener_with_transcript("Hey Zwift harder")
+        mock_match.assert_called_once_with("Hey Zwift harder")
+
+
+# ─────────────────────────────────────────────
+# Whisper call argument tests
+# ─────────────────────────────────────────────
+
+class TestWhisperCallArgs:
+    """voice_listener should call mlx_whisper.transcribe with the right args."""
+
+    def test_short_prompt_and_no_condition_on_previous_text(self):
+        mock_audio = MagicMock()
+        mock_audio.get_wav_data.return_value = b"fake_audio"
+
+        mock_recognizer = MagicMock()
+        mock_recognizer.listen.side_effect = [mock_audio, KeyboardInterrupt]
+
+        original_use_mlx = coach._USE_MLX_WHISPER
+        original_tts_ended_at = coach._tts_ended_at
+        coach._USE_MLX_WHISPER = True
+        coach._tts_ended_at = 0.0  # ensure TTS grace period doesn't filter audio
+        try:
+            with patch("coach.sr.Recognizer", return_value=mock_recognizer), \
+                 patch("coach.sr.Microphone"), \
+                 patch("coach.mlx_whisper.transcribe", return_value={"text": ""}) as mock_transcribe, \
+                 patch("coach.match_command"):
+                with pytest.raises(KeyboardInterrupt):
+                    coach.voice_listener()
+
+            call_kwargs = mock_transcribe.call_args[1]
+            assert call_kwargs.get("initial_prompt") == "Zwift"
+            assert call_kwargs.get("condition_on_previous_text") is False
+        finally:
+            coach._USE_MLX_WHISPER = original_use_mlx
+            coach._tts_ended_at = original_tts_ended_at
+
+
+# ─────────────────────────────────────────────
+# Welcome message tests
+# ─────────────────────────────────────────────
+
+class TestWelcomeMessages:
+    """The startup welcome message should be one of the known variants."""
+
+    EXPECTED_MESSAGES = {
+        "Coach is online. Let's ride!",
+        "Connected. Time to suffer.",
+        "I'm here. Legs ready?",
+        "Coach locked in. Let's go!",
+        "Online and watching. Ride hard!",
+        "Linked up. Show me what you've got.",
+        "Ready to coach. Pedal up!",
+        "I see you. Let's make it hurt.",
+        "Coach is live. No slacking.",
+        "Connected. Let's get after it.",
+        "All systems go. Ride on!",
+        "Locked in. Time to turn the screws.",
+    }
+
+    @patch("coach.coaching_loop")
+    @patch("coach.connect_websocket")
+    @patch("coach.time.sleep")
+    def test_welcome_message_is_valid_variant(self, mock_sleep, mock_connect, mock_loop):
+        """main() should enqueue one of the 12 welcome messages."""
+        while not coach.speech_queue.empty():
+            coach.speech_queue.get_nowait()
+
+        coach.main()
+
+        msg = coach.speech_queue.get_nowait()
+        assert msg in self.EXPECTED_MESSAGES
+
+    @patch("coach.coaching_loop")
+    @patch("coach.connect_websocket")
+    @patch("coach.time.sleep")
+    def test_welcome_messages_vary(self, mock_sleep, mock_connect, mock_loop):
+        """Running main() repeatedly should not always produce the same message."""
+        seen = set()
+        for _ in range(30):
+            while not coach.speech_queue.empty():
+                coach.speech_queue.get_nowait()
+            coach.main()
+            msg = coach.speech_queue.get_nowait()
+            seen.add(msg)
+        assert len(seen) > 1, "Welcome messages should vary (random.choice)"
