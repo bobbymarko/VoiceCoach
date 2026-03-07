@@ -3,5 +3,6 @@ requests>=2.31.0
 elevenlabs>=1.0.0
 python-dotenv>=1.0.0
 SpeechRecognition>=3.10.0
+mlx-whisper>=0.4.0
 pynput>=1.7.6
 pyaudio>=0.2.13

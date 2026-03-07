@@ -39,6 +39,7 @@ import requests
 import websocket
 from elevenlabs import ElevenLabs as ElevenLabsClient
 import speech_recognition as sr
+import mlx_whisper
 from pynput.keyboard import Key, Controller as KeyboardController
 from dotenv import load_dotenv
 
@@ -56,8 +57,9 @@ VOICE_ID         = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")
 
 _elevenlabs = ElevenLabsClient(api_key=ELEVENLABS_KEY) if ELEVENLABS_KEY else None
 
+WHISPER_MODEL    = os.getenv("WHISPER_MODEL", "mlx-community/whisper-small-mlx")
 WAKE_WORD        = "zwift"       # say this before your command
-WAKE_WORDS       = ("zwift", "swift")  # common mishearing of "zwift"
+WAKE_WORDS       = ("zwift", "swift", "zwith", "is with", "is we", "his lift")  # common Whisper mishearings
 COOLDOWN_SECONDS = 12            # min seconds between proactive coach comments
 CHECK_INTERVAL   = 3             # seconds between trigger checks
 MIC_ENERGY       = 300           # mic sensitivity — raise if false triggers, lower if not hearing you
@@ -455,18 +457,34 @@ def voice_listener():
         while True:
             try:
                 audio = recognizer.listen(source, timeout=None, phrase_time_limit=5)
-                if _tts_active.is_set():
-                    continue  # ignore mic input while coach is speaking
 
-                transcript = recognizer.recognize_google(audio)
+                # Discard audio captured during or just after TTS playback
+                if _tts_active.is_set() or time.time() - _tts_ended_at < TTS_GRACE_SECONDS:
+                    continue
+
+                tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                try:
+                    tmp_wav.write(audio.get_wav_data())
+                    tmp_wav.close()
+                    result = mlx_whisper.transcribe(
+                        tmp_wav.name,
+                        path_or_hf_repo=WHISPER_MODEL,
+                        language="en",
+                        initial_prompt="Zwift is a cycling app. The wake word is 'Zwift'.",
+                    )
+                    transcript = result["text"].strip()
+                finally:
+                    os.unlink(tmp_wav.name)
+
+                if not transcript:
+                    continue
+
                 print(f"[Voice] Heard: '{transcript}'")
 
                 key, response = match_command(transcript)
                 if response:
                     handle_voice_action(key, response)
 
-            except sr.UnknownValueError:
-                pass   # didn't catch anything intelligible
             except sr.RequestError as e:
                 print(f"[Voice] Speech recognition error: {e}")
             except Exception as e:
@@ -650,6 +668,8 @@ AUDIO_PLAYER_NAME, AUDIO_PLAYER_ARGS = _detect_audio_player()
 
 # Set while TTS audio is playing so the voice listener ignores its own output
 _tts_active = threading.Event()
+_tts_ended_at = 0.0  # timestamp when TTS last finished (for grace period)
+TTS_GRACE_SECONDS = 1.5  # ignore mic for this long after TTS ends
 
 def speak(text):
     if not _elevenlabs:
@@ -676,7 +696,9 @@ def speak(text):
                 )
                 _tts_active.set()
                 def _finish(p, f):
+                    global _tts_ended_at
                     p.wait()
+                    _tts_ended_at = time.time()
                     _tts_active.clear()
                     os.unlink(f)
                 threading.Thread(target=_finish, args=(proc, tmp.name), daemon=True).start()
