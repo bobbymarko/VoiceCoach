@@ -1036,7 +1036,7 @@ class TestWhisperCallArgs:
                     coach.voice_listener()
 
             call_kwargs = mock_transcribe.call_args[1]
-            assert call_kwargs.get("initial_prompt") == "Zwift"
+            assert call_kwargs.get("initial_prompt") == "Hey Zwift"
             assert call_kwargs.get("condition_on_previous_text") is False
         finally:
             coach._USE_MLX_WHISPER = original_use_mlx

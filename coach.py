@@ -520,7 +520,7 @@ def voice_listener():
                             tmp_wav.name,
                             path_or_hf_repo=WHISPER_MODEL,
                             language="en",
-                            initial_prompt="Zwift",  # short = less for Whisper to hallucinate
+                            initial_prompt="Hey Zwift",  # prime recognition of the wake phrase
                             condition_on_previous_text=False,
                         )
                         transcript = result["text"].strip()
