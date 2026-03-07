@@ -13,7 +13,7 @@ Setup:
 1. Copy .env.example to .env and fill in your API keys
 1. python coach.py
 
-Voice commands (say "zwift" then your command):
+Voice commands (say "hey zwift" then your command):
 "skip interval"         → Tab        (skip current workout block)
 "harder" / "push"       → Page Up    (increase workout intensity)
 "easier" / "back off"   → Page Down  (decrease workout intensity)
@@ -71,8 +71,8 @@ VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")  # fallback 
 _elevenlabs = ElevenLabsClient(api_key=ELEVENLABS_KEY) if ELEVENLABS_KEY else None
 
 WHISPER_MODEL    = os.getenv("WHISPER_MODEL", "mlx-community/whisper-small-mlx")
-WAKE_WORD        = "zwift"       # say this before your command
-WAKE_WORDS       = ("zwift", "swift", "zwith", "is with", "is we", "his lift")  # common Whisper mishearings
+WAKE_WORD        = "hey zwift"   # say this before your command
+WAKE_WORDS       = ("hey zwift", "hey swift", "hey zwith", "hey is with", "hey is we", "hey his lift", "a zwift", "a swift")  # common Whisper mishearings
 COOLDOWN_SECONDS = 12            # min seconds between proactive coach comments
 CHECK_INTERVAL   = 3             # seconds between trigger checks
 MIC_ENERGY       = 300           # mic sensitivity — raise if false triggers, lower if not hearing you
@@ -491,7 +491,7 @@ def voice_listener():
     recognizer.pause_threshold = 0.6
 
     stt_engine = "mlx_whisper" if _USE_MLX_WHISPER else "google"
-    print(f"[Voice] Listening for voice commands (wake word: 'zwift', STT: {stt_engine})...")
+    print(f"[Voice] Listening for voice commands (wake word: 'hey zwift', STT: {stt_engine})...")
 
     try:
         mic = sr.Microphone()
@@ -520,7 +520,7 @@ def voice_listener():
                             tmp_wav.name,
                             path_or_hf_repo=WHISPER_MODEL,
                             language="en",
-                            initial_prompt="Zwift is a cycling app. The wake word is 'Zwift'.",
+                            initial_prompt="Zwift is a cycling app. The wake word is 'Hey Zwift'.",
                         )
                         transcript = result["text"].strip()
                     finally:
@@ -820,12 +820,12 @@ def main():
     print("=" * 60)
     print()
     print("  Voice commands:")
-    print("  \"zwift skip interval\"    -> skip workout block")
-    print("  \"zwift harder\"           -> increase intensity")
-    print("  \"zwift easier\"           -> decrease intensity")
-    print("  \"zwift power up\"         -> use power-up")
-    print("  \"zwift how am I doing\"   -> live status report")
-    print("  \"zwift be mean\"          -> switch to drill sergeant")
+    print("  \"hey zwift skip interval\"    -> skip workout block")
+    print("  \"hey zwift harder\"           -> increase intensity")
+    print("  \"hey zwift easier\"           -> decrease intensity")
+    print("  \"hey zwift power up\"         -> use power-up")
+    print("  \"hey zwift how am I doing\"   -> live status report")
+    print("  \"hey zwift be mean\"          -> switch to drill sergeant")
     print("  ...and more. See coach.py for full list.")
     print()
 

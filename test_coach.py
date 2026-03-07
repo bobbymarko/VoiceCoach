@@ -75,18 +75,18 @@ def setup_state_for_trigger(**kwargs):
 class TestMatchCommand:
     @patch("coach._classify_voice_command", return_value="skip_interval")
     def test_skip_interval(self, mock_classify):
-        key, resp = coach.match_command("zwift skip interval")
+        key, resp = coach.match_command("hey zwift skip interval")
         assert key is not None
         assert resp == "Skipping interval!"
 
     @patch("coach._classify_voice_command", return_value="harder")
     def test_harder(self, mock_classify):
-        key, resp = coach.match_command("zwift harder")
+        key, resp = coach.match_command("hey zwift harder")
         assert resp == "Turning it up!"
 
     @patch("coach._classify_voice_command", return_value="easier")
     def test_easier(self, mock_classify):
-        key, resp = coach.match_command("zwift back off")
+        key, resp = coach.match_command("hey zwift back off")
         assert resp == "Dialling it back."
 
     @patch("coach._classify_voice_command", return_value="power_up")
@@ -96,28 +96,28 @@ class TestMatchCommand:
 
     @patch("coach._classify_voice_command", return_value="screenshot")
     def test_screenshot(self, mock_classify):
-        key, resp = coach.match_command("zwift screenshot")
+        key, resp = coach.match_command("hey zwift screenshot")
         assert resp == "Cheese!"
 
     @patch("coach._classify_voice_command", return_value="ride_on")
     def test_ride_on(self, mock_classify):
-        key, resp = coach.match_command("zwift ride on")
+        key, resp = coach.match_command("hey zwift ride on")
         assert resp == "Ride on sent!"
 
     @patch("coach._classify_voice_command", return_value="u_turn")
     def test_u_turn(self, mock_classify):
-        key, resp = coach.match_command("zwift u turn")
+        key, resp = coach.match_command("hey zwift u turn")
         assert resp == "Turning around."
 
     @patch("coach._classify_voice_command", return_value="status_report")
     def test_status_report(self, mock_classify):
-        key, resp = coach.match_command("zwift how am i doing")
+        key, resp = coach.match_command("hey zwift how am i doing")
         assert key is None
         assert resp == "status_report"
 
     @patch("coach._classify_voice_command", return_value="personality_drill")
     def test_personality_switch(self, mock_classify):
-        key, resp = coach.match_command("zwift be mean")
+        key, resp = coach.match_command("hey zwift be mean")
         assert key is None
         assert resp == "personality:drill_sergeant"
 
@@ -128,14 +128,14 @@ class TestMatchCommand:
 
     @patch("coach._classify_voice_command", return_value="freeform")
     def test_freeform_question(self, mock_classify):
-        key, resp = coach.match_command("zwift should I attack now")
+        key, resp = coach.match_command("hey zwift should I attack now")
         assert key is None
         assert resp.startswith("freeform:")
         assert "should i attack now" in resp
 
     @patch("coach._classify_voice_command", return_value="harder")
     def test_case_insensitive(self, mock_classify):
-        key, resp = coach.match_command("ZWIFT HARDER")
+        key, resp = coach.match_command("HEY ZWIFT HARDER")
         assert resp == "Turning it up!"
 
     @patch("coach._classify_voice_command", return_value="wave")
@@ -492,37 +492,47 @@ class TestSpeak:
 
 class TestWakeWordVariants:
     @patch("coach._classify_voice_command", return_value="harder")
-    def test_swift_mishearing(self, mock_classify):
-        key, resp = coach.match_command("swift harder")
+    def test_hey_swift_mishearing(self, mock_classify):
+        key, resp = coach.match_command("hey swift harder")
         assert resp == "Turning it up!"
 
     @patch("coach._classify_voice_command", return_value="screenshot")
-    def test_zwith_mishearing(self, mock_classify):
-        key, resp = coach.match_command("zwith screenshot")
+    def test_hey_zwith_mishearing(self, mock_classify):
+        key, resp = coach.match_command("hey zwith screenshot")
         assert resp == "Cheese!"
 
     @patch("coach._classify_voice_command", return_value="wave")
-    def test_is_with_mishearing(self, mock_classify):
-        key, resp = coach.match_command("is with wave")
+    def test_hey_is_with_mishearing(self, mock_classify):
+        key, resp = coach.match_command("hey is with wave")
         assert resp == "Waving!"
 
     @patch("coach._classify_voice_command", return_value="ride_on")
-    def test_his_lift_mishearing(self, mock_classify):
-        key, resp = coach.match_command("his lift ride on")
+    def test_hey_his_lift_mishearing(self, mock_classify):
+        key, resp = coach.match_command("hey his lift ride on")
         assert resp == "Ride on sent!"
 
     @patch("coach._classify_voice_command", return_value="easier")
-    def test_is_we_mishearing(self, mock_classify):
-        key, resp = coach.match_command("is we easier")
+    def test_hey_is_we_mishearing(self, mock_classify):
+        key, resp = coach.match_command("hey is we easier")
+        assert resp == "Dialling it back."
+
+    @patch("coach._classify_voice_command", return_value="harder")
+    def test_a_zwift_mishearing(self, mock_classify):
+        key, resp = coach.match_command("a zwift harder")
+        assert resp == "Turning it up!"
+
+    @patch("coach._classify_voice_command", return_value="easier")
+    def test_a_swift_mishearing(self, mock_classify):
+        key, resp = coach.match_command("a swift easier")
         assert resp == "Dialling it back."
 
     def test_wake_word_only_no_command(self):
-        key, resp = coach.match_command("zwift")
+        key, resp = coach.match_command("hey zwift")
         assert key is None
         assert resp is None
 
-    def test_swift_only_no_command(self):
-        key, resp = coach.match_command("swift")
+    def test_hey_swift_only_no_command(self):
+        key, resp = coach.match_command("hey swift")
         assert key is None
         assert resp is None
 
