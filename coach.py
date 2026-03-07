@@ -37,6 +37,7 @@ import subprocess
 import tempfile
 import requests
 import websocket
+from elevenlabs import ElevenLabs as ElevenLabsClient
 import speech_recognition as sr
 from pynput.keyboard import Key, Controller as KeyboardController
 from dotenv import load_dotenv
@@ -53,7 +54,10 @@ ELEVENLABS_KEY   = os.getenv("ELEVENLABS_API_KEY", "")
 ANTHROPIC_KEY    = os.getenv("ANTHROPIC_API_KEY", "")
 VOICE_ID         = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")
 
+_elevenlabs = ElevenLabsClient(api_key=ELEVENLABS_KEY) if ELEVENLABS_KEY else None
+
 WAKE_WORD        = "zwift"       # say this before your command
+WAKE_WORDS       = ("zwift", "swift")  # common mishearing of "zwift"
 COOLDOWN_SECONDS = 12            # min seconds between proactive coach comments
 CHECK_INTERVAL   = 3             # seconds between trigger checks
 MIC_ENERGY       = 300           # mic sensitivity — raise if false triggers, lower if not hearing you
@@ -95,49 +99,115 @@ ACTIVE_PERSONALITY = "hype"
 # Each entry: list of trigger phrases → (key_to_press, confirmation_message)
 # key_to_press can be a Key enum, a string char, or None (for meta-commands)
 
-VOICE_COMMANDS = [
+COMMAND_MAP = {
     # Workout control
-    (["skip interval", "skip", "next interval", "skip block"],
-        Key.tab,        "Skipping interval!"),
+    "skip_interval":       (Key.tab,        "Skipping interval!"),
+    "harder":              (Key.page_up,    "Turning it up!"),
+    "easier":              (Key.page_down,  "Dialling it back."),
+    "power_up":            (Key.space,      "Power up deployed!"),
+    "u_turn":              (Key.down,       "Turning around."),
+    "turn_left":           (Key.left,       "Turning left."),
+    "turn_right":          (Key.right,      "Turning right."),
+    "actions_menu":        (Key.up,         "Opening actions menu."),
+    "menu":                (Key.esc,        "Opening menu."),
 
-    (["harder", "push", "more power", "increase", "pump it up"],
-        Key.page_up,    "Turning it up!"),
+    # Rider actions
+    "elbow_flick":         (Key.f1,         "Elbow flick!"),
+    "wave":                (Key.f2,         "Waving!"),
+    "ride_on":             (Key.f3,         "Ride on sent!"),
+    "hammer_time":         (Key.f4,         "Hammer time!"),
+    "nice":                (Key.f5,         "Nice!"),
+    "im_toast":            (Key.f7,         "Hang in there!"),
+    "bike_bell":           (Key.f8,         "Ding ding!"),
+    "capture_video":       (Key.f9,         "Recording!"),
+    "screenshot":          (Key.f10,        "Cheese!"),
 
-    (["easier", "back off", "back it off", "too hard", "reduce", "less"],
-        Key.page_down,  "Dialling it back."),
+    # Menus & HUD
+    "device_pairing":      ('a',            "Opening device pairing."),
+    "workout_menu":        ('e',            "Opening workout menu."),
+    "toggle_graph":        ('g',            "Toggling graph."),
+    "hide_hud":            ('h',            "Toggling HUD."),
+    "group_message":       ('m',            "Opening group message."),
+    "promo_code":          ('p',            "Opening promo code entry."),
+    "garage":              ('t',            "Opening garage."),
 
-    # In-game actions
-    (["power up", "use power up", "powerup"],
-        Key.space,      "Power up deployed!"),
+    # Camera angles
+    "camera_default":      ('1',            "Default camera."),
+    "camera_close":        ('2',            "Close follow camera."),
+    "camera_first_person": ('3',            "First person view."),
+    "camera_side":         ('4',            "Side view."),
+    "camera_low":          ('5',            "Low view."),
+    "camera_rear":         ('6',            "Rear view."),
+    "camera_spectator":    ('7',            "Spectator view."),
+    "camera_helicopter":   ('8',            "Helicopter view."),
+    "camera_bird":         ('9',            "Bird's eye view."),
+    "camera_drone":        ('0',            "Drone view."),
 
-    (["screenshot", "take a photo", "take a picture", "snap"],
-        Key.f10,        "Cheese!"),
+    # Meta — handled in code, no keypress
+    "status_report":       (None,           "status_report"),
+    "personality_hype":    (None,           "personality:hype"),
+    "personality_drill":   (None,           "personality:drill_sergeant"),
+    "personality_british": (None,           "personality:british"),
+    "personality_data":    (None,           "personality:data"),
+}
 
-    (["ride on", "give ride on", "thumbs up"],
-        Key.f3,         "Ride on sent!"),
+_CLASSIFY_SYSTEM = """You classify voice commands for a Zwift cycling app. \
+Return ONLY the command ID that best matches what the rider said. \
+Available command IDs and what they mean:
 
-    (["wave", "say hi"],
-        Key.f2,         "Waving!"),
+Workout control:
+- skip_interval: skip this interval or workout block
+- harder: increase power or intensity, push harder
+- easier: decrease power or intensity, back off
+- power_up: use a power-up
+- u_turn: turn around, reverse, go back
+- turn_left: turn left at intersection
+- turn_right: turn right at intersection
+- actions_menu: show actions or options menu
+- menu: open main menu, escape, go back
 
-    (["u turn", "turn around", "go back", "reverse"],
-        Key.down,       "Turning around."),
+Rider actions:
+- elbow_flick: elbow flick gesture
+- wave: wave to another rider, say hi
+- ride_on: give a ride on or thumbs up ("right on" counts as this)
+- hammer_time: hammer time
+- nice: say nice
+- im_toast: I'm toast, I'm done, I'm dying
+- bike_bell: ring the bell, ding ding
+- capture_video: record or capture video
+- screenshot: take a photo or screenshot
 
-    # Meta commands — key=None means handled in code, not keypress
-    (["how am i doing", "status", "give me a status", "what's my status", "update"],
-        None,           "status_report"),
+Menus & HUD:
+- device_pairing: device pairing screen
+- workout_menu: workout selection menu
+- toggle_graph: toggle the watt or HR graph
+- hide_hud: hide or show the HUD display
+- group_message: open group message
+- promo_code: enter a promo code
+- garage: open garage, change bike or kit, drop shop
 
-    (["coach hype", "be hype", "hype mode", "change to hype"],
-        None,           "personality:hype"),
+Camera angles:
+- camera_default: default camera (1)
+- camera_close: close follow camera (2)
+- camera_first_person: first person or ego view (3)
+- camera_side: side view (4)
+- camera_low: low view (5)
+- camera_rear: rear view, look behind (6)
+- camera_spectator: spectator view (7)
+- camera_helicopter: helicopter view (8)
+- camera_bird: bird's eye view (9)
+- camera_drone: drone view (0)
 
-    (["coach drill sergeant", "drill sergeant", "change to drill sergeant", "be mean"],
-        None,           "personality:drill_sergeant"),
+Coach meta:
+- status_report: how am I doing, give me a status update
+- personality_hype: switch to hype coach mode
+- personality_drill: switch to drill sergeant coach mode
+- personality_british: switch to British coach mode
+- personality_data: switch to data or nerdy coach mode
 
-    (["coach british", "be british", "change to british", "disappoint me"],
-        None,           "personality:british"),
+- freeform: a question or comment that doesn't match any command
 
-    (["coach data", "data mode", "be nerdy", "change to data"],
-        None,           "personality:data"),
-]
+Return exactly one command ID and nothing else."""
 
 # ─────────────────────────────────────────────
 # State
@@ -256,24 +326,53 @@ def connect_websocket():
 # Voice Command Listener
 # ─────────────────────────────────────────────
 
+def _classify_voice_command(text):
+    """Ask Claude to classify the voice command. Returns a command ID string."""
+    payload = {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 20,
+        "system": _CLASSIFY_SYSTEM,
+        "messages": [{"role": "user", "content": text}],
+    }
+    headers = {
+        "x-api-key": ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    try:
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            json=payload, headers=headers, timeout=5
+        )
+        r.raise_for_status()
+        return r.json()["content"][0]["text"].strip().lower()
+    except Exception as e:
+        print(f"[Claude classify error] {e}")
+        return "freeform"
+
 def match_command(transcript):
     """Return (key, response) for the best matching command, or (None, None)."""
     t = transcript.lower().strip()
 
-    # Must start with wake word (or be very close to it)
-    if WAKE_WORD not in t:
+    # Must contain a wake word (including common mishearings)
+    matched_wake = next((w for w in WAKE_WORDS if w in t), None)
+    if not matched_wake:
         return None, None
 
     # Strip wake word and everything before it
-    after_wake = t[t.index(WAKE_WORD) + len(WAKE_WORD):].strip()
+    after_wake = t[t.index(matched_wake) + len(matched_wake):].strip()
     print(f"[Voice] Heard after wake word: '{after_wake}'")
 
-    for phrases, key, response in VOICE_COMMANDS:
-        for phrase in phrases:
-            if phrase in after_wake or after_wake in phrase:
-                return key, response
+    if not after_wake:
+        return None, None
 
-    # No match — ask Claude to interpret it as a freeform question
+    command_id = _classify_voice_command(after_wake)
+    print(f"[Voice] Classified as: '{command_id}'")
+
+    if command_id in COMMAND_MAP:
+        return COMMAND_MAP[command_id]
+
+    # freeform — pass to Claude as a question
     return None, f"freeform:{after_wake}"
 
 def handle_voice_action(key, response):
@@ -338,7 +437,7 @@ def voice_listener():
     """Continuously listens for voice commands in a background thread."""
     recognizer = sr.Recognizer()
     recognizer.energy_threshold = MIC_ENERGY
-    recognizer.dynamic_energy_threshold = True
+    recognizer.dynamic_energy_threshold = False  # prevents wake word clipping
     recognizer.pause_threshold = 0.6
 
     print("[Voice] Listening for voice commands (wake word: 'zwift')...")
@@ -356,6 +455,9 @@ def voice_listener():
         while True:
             try:
                 audio = recognizer.listen(source, timeout=None, phrase_time_limit=5)
+                if _tts_active.is_set():
+                    continue  # ignore mic input while coach is speaking
+
                 transcript = recognizer.recognize_google(audio)
                 print(f"[Voice] Heard: '{transcript}'")
 
@@ -546,24 +648,25 @@ def _detect_audio_player():
 
 AUDIO_PLAYER_NAME, AUDIO_PLAYER_ARGS = _detect_audio_player()
 
+# Set while TTS audio is playing so the voice listener ignores its own output
+_tts_active = threading.Event()
+
 def speak(text):
-    if not ELEVENLABS_KEY:
+    if not _elevenlabs:
         print(f"[COACH] {text}")
         return
 
-    url     = f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}/stream"
-    headers = {"xi-api-key": ELEVENLABS_KEY, "Content-Type": "application/json"}
-    payload = {
-        "text": text,
-        "model_id": "eleven_turbo_v2",
-        "voice_settings": {"stability": 0.4, "similarity_boost": 0.8, "style": 0.6},
-    }
     try:
-        r = requests.post(url, json=payload, headers=headers, stream=True, timeout=10)
-        r.raise_for_status()
+        audio_stream = _elevenlabs.text_to_speech.stream(
+            voice_id=VOICE_ID,
+            text=text,
+            model_id="eleven_turbo_v2_5",
+            output_format="mp3_44100_128",
+            voice_settings={"stability": 0.4, "similarity_boost": 0.8, "style": 0.6},
+        )
         tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
         try:
-            for chunk in r.iter_content(chunk_size=4096):
+            for chunk in audio_stream:
                 tmp.write(chunk)
             tmp.close()
             if AUDIO_PLAYER_ARGS:
@@ -571,12 +674,12 @@ def speak(text):
                     AUDIO_PLAYER_ARGS + [tmp.name],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
-                # Wait for playback to finish, then clean up the temp file
-                threading.Thread(
-                    target=lambda p, f: (p.wait(), os.unlink(f)),
-                    args=(proc, tmp.name),
-                    daemon=True,
-                ).start()
+                _tts_active.set()
+                def _finish(p, f):
+                    p.wait()
+                    _tts_active.clear()
+                    os.unlink(f)
+                threading.Thread(target=_finish, args=(proc, tmp.name), daemon=True).start()
             else:
                 print(f"[COACH - no player] {text}")
                 os.unlink(tmp.name)
@@ -632,7 +735,7 @@ def main():
     print("  Zwift AI Coach + Voice Control")
     print("=" * 60)
     print(f"  Personality : {ACTIVE_PERSONALITY.upper()}")
-    print(f"  Wake word   : \"{WAKE_WORD}\"")
+    print(f"  Wake word   : {WAKE_WORDS}")
     print(f"  Sauce WS    : {SAUCE_WS_URL}")
     print(f"  ElevenLabs  : {'configured' if ELEVENLABS_KEY else 'missing (print only)'}")
     print(f"  Anthropic   : {'configured' if ANTHROPIC_KEY else 'missing'}")
