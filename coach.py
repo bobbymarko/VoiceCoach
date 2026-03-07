@@ -843,7 +843,22 @@ def main():
 
     # Give a startup message once Sauce connects (short delay)
     time.sleep(3)
-    speech_queue.put("Zwift AI Coach is online. I'm watching. Let's go!")
+    import random
+    _welcome_messages = [
+        "Coach is online. Let's ride!",
+        "Connected. Time to suffer.",
+        "I'm here. Legs ready?",
+        "Coach locked in. Let's go!",
+        "Online and watching. Ride hard!",
+        "Linked up. Show me what you've got.",
+        "Ready to coach. Pedal up!",
+        "I see you. Let's make it hurt.",
+        "Coach is live. No slacking.",
+        "Connected. Let's get after it.",
+        "All systems go. Ride on!",
+        "Locked in. Time to turn the screws.",
+    ]
+    speech_queue.put(random.choice(_welcome_messages))
 
     # Main coaching loop (blocks)
     coaching_loop()
