@@ -431,9 +431,11 @@ def handle_voice_action(key, response):
                 return
 
         # It's a real keypress — send it to Zwift
-        print(f"[Voice] Sending key: {key}")
+        # U-turn requires holding the down key for ~3 seconds to register
+        hold_duration = 3.0 if key == Key.down else 0.05
+        print(f"[Voice] Sending key: {key} (hold {hold_duration}s)")
         keyboard.press(key)
-        time.sleep(0.05)
+        time.sleep(hold_duration)
         keyboard.release(key)
         if response is None:
             return  # game provides its own feedback, stay silent
