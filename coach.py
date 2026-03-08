@@ -510,8 +510,42 @@ def handle_voice_action(key, response):
             speech_queue.put(commentary)
             last_spoken_at = time.time()
 
+def _transcribe(audio, recognizer):
+    """Transcribe a captured audio chunk to text. Returns empty string on failure."""
+    if _USE_MLX_WHISPER:
+        tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        try:
+            tmp_wav.write(audio.get_wav_data())
+            tmp_wav.close()
+            result = mlx_whisper.transcribe(
+                tmp_wav.name,
+                path_or_hf_repo=WHISPER_MODEL,
+                language="en",
+                initial_prompt="Hey Zwift",
+                condition_on_previous_text=False,
+            )
+            return result["text"].strip()
+        finally:
+            os.unlink(tmp_wav.name)
+    else:
+        try:
+            return recognizer.recognize_google(audio).strip()
+        except sr.UnknownValueError:
+            return ""
+
+_HALLUCINATIONS = ("cycling app", "wake word", "thank you for watching", "thanks for watching")
+_HALLUCINATION_EXACT = {"you", "you.", "yeah", "yeah.", "hmm", "hmm."}
+
 def voice_listener():
-    """Continuously listens for voice commands in a background thread."""
+    """Continuously listens for voice commands in a background thread.
+
+    Two-phase flow:
+      Phase 1 — short listen for wake word only.
+      Phase 2 — after playing the "yeah" acknowledgment, listen for the command.
+
+    If the user speaks wake word + command in a single breath, Phase 2 is skipped
+    and the command executes immediately (backward-compatible).
+    """
     recognizer = sr.Recognizer()
     recognizer.energy_threshold = MIC_ENERGY
     recognizer.dynamic_energy_threshold = False  # prevents wake word clipping
@@ -540,46 +574,51 @@ def voice_listener():
 
         while True:
             try:
-                audio = recognizer.listen(source, timeout=None, phrase_time_limit=5)
+                # ── Phase 1: listen for wake word ───────────────────────────────
+                audio = recognizer.listen(source, timeout=None, phrase_time_limit=2)
 
                 # Discard audio captured during or just after TTS playback
                 if _tts_active.is_set() or time.time() - _tts_ended_at < TTS_GRACE_SECONDS:
                     continue
 
-                if _USE_MLX_WHISPER:
-                    tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-                    try:
-                        tmp_wav.write(audio.get_wav_data())
-                        tmp_wav.close()
-                        result = mlx_whisper.transcribe(
-                            tmp_wav.name,
-                            path_or_hf_repo=WHISPER_MODEL,
-                            language="en",
-                            initial_prompt="Hey Zwift",  # prime recognition of the wake phrase
-                            condition_on_previous_text=False,
-                        )
-                        transcript = result["text"].strip()
-                    finally:
-                        os.unlink(tmp_wav.name)
-                else:
-                    try:
-                        transcript = recognizer.recognize_google(audio).strip()
-                    except sr.UnknownValueError:
-                        continue
-
+                transcript = _transcribe(audio, recognizer)
                 if not transcript:
                     continue
 
-                # Filter Whisper hallucinations (outputting prompt or silence artifacts)
                 _lower = transcript.lower()
-                if any(h in _lower for h in ("cycling app", "wake word", "thank you for watching", "thanks for watching")):
+                if any(h in _lower for h in _HALLUCINATIONS) or _lower in _HALLUCINATION_EXACT:
                     continue
-                if _lower in ("you", "you.", "yeah", "yeah.", "hmm", "hmm."):
+
+                matched_wake = next((w for w in WAKE_WORDS if w in _lower), None)
+                if not matched_wake:
                     continue
 
                 print(f"[Voice] Heard: '{transcript}'")
 
-                key, response = match_command(transcript)
+                # If the command was already included in the same utterance, run it directly
+                after_wake = _lower[_lower.index(matched_wake) + len(matched_wake):].strip()
+                if after_wake:
+                    key, response = match_command(transcript)
+                    if response:
+                        handle_voice_action(key, response)
+                    continue
+
+                # ── Wake word only: acknowledge, then open command window ────────
+                print("[Voice] Wake word — waiting for command...")
+                play_ack_and_wait()
+
+                # ── Phase 2: listen for command ──────────────────────────────────
+                try:
+                    audio2 = recognizer.listen(source, timeout=5, phrase_time_limit=5)
+                except sr.WaitTimeoutError:
+                    continue  # user didn't speak; return to wake-word listening
+
+                transcript2 = _transcribe(audio2, recognizer)
+                if not transcript2:
+                    continue
+
+                print(f"[Voice] Command: '{transcript2}'")
+                key, response = match_command("hey zwift " + transcript2)
                 if response:
                     handle_voice_action(key, response)
 
@@ -769,6 +808,8 @@ _tts_active = threading.Event()
 _tts_ended_at = 0.0  # timestamp when TTS last finished (for grace period)
 TTS_GRACE_SECONDS = 1.5  # ignore mic for this long after TTS ends
 
+_ack_audio_file = None  # path to pre-cached wake acknowledgment audio
+
 def speak(text):
     if not _elevenlabs:
         print(f"[COACH] {text}")
@@ -811,6 +852,42 @@ def speak(text):
     except Exception as e:
         print(f"[ElevenLabs error] {e}")
         print(f"[COACH] {text}")
+
+def _cache_ack_audio():
+    """Pre-generate the wake acknowledgment audio so it plays instantly on every wake."""
+    global _ack_audio_file
+    if not _elevenlabs or not AUDIO_PLAYER_ARGS:
+        return
+    print("[Voice] Caching wake acknowledgment audio...")
+    try:
+        voice_id = PERSONALITY_VOICES.get(ACTIVE_PERSONALITY, VOICE_ID)
+        audio_stream = _elevenlabs.text_to_speech.stream(
+            voice_id=voice_id,
+            text="Yeah?",
+            model_id="eleven_turbo_v2_5",
+            output_format="mp3_44100_128",
+            voice_settings={"stability": 0.4, "similarity_boost": 0.8, "style": 0.6},
+        )
+        tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+        for chunk in audio_stream:
+            tmp.write(chunk)
+        tmp.close()
+        _ack_audio_file = tmp.name
+        print("[Voice] Wake acknowledgment ready.")
+    except Exception as e:
+        print(f"[Voice] Could not cache acknowledgment audio: {e}")
+
+def play_ack_and_wait():
+    """Play the pre-cached wake acknowledgment and block until playback finishes."""
+    if _ack_audio_file and AUDIO_PLAYER_ARGS:
+        proc = subprocess.Popen(
+            AUDIO_PLAYER_ARGS + [_ack_audio_file],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        proc.wait()
+        time.sleep(0.3)  # brief settle before mic opens for command
+    else:
+        print("[Voice] Ready for command...")
 
 def speech_worker():
     while True:
@@ -876,6 +953,9 @@ def main():
         print("ERROR: ANTHROPIC_API_KEY is not set. The coach cannot generate commentary.")
         print("Copy .env.example to .env and add your API key.")
         return
+
+    # Pre-cache the wake acknowledgment audio so it plays instantly
+    _cache_ack_audio()
 
     # Start threads
     threading.Thread(target=speech_worker,  daemon=True).start()
