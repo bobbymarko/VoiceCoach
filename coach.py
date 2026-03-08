@@ -522,6 +522,14 @@ def voice_listener():
 
     try:
         mic = sr.Microphone()
+        try:
+            import pyaudio
+            pa = pyaudio.PyAudio()
+            mic_name = pa.get_default_input_device_info()["name"]
+            pa.terminate()
+            print(f"[Voice] Microphone: {mic_name}")
+        except Exception:
+            pass
     except (OSError, AttributeError) as e:
         print(f"[Voice] No microphone found: {e}")
         print("[Voice] Voice commands disabled. Proactive coaching still active.")
